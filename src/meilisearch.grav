@@ -52,7 +52,7 @@ namespace apogee {
             throw new StateError("Meilisearch task ${task.toJson()} did not finish in 30 s");
         }
         fn update(index: string, docs: Array<SearchDocument>) {
-            if (docs.size() == 0) { return; }
+            if (docs.isEmpty()) { return; }
             let arr = Json.array();
             for (d in docs) {
                 let o = Json.parse(d.fieldsJson());
@@ -63,7 +63,7 @@ namespace apogee {
                             .post(self.host + "/indexes/" + self.uid(index) + "/documents?primaryKey=id"));
         }
         fn delete(index: string, ids: Array<string>) {
-            if (ids.size() == 0) { return; }
+            if (ids.isEmpty()) { return; }
             let arr = Json.array();
             for (i in ids) { arr.push(i); }
             self.settle(self.req().withBody(arr.toJson(), "application/json")
@@ -84,7 +84,7 @@ namespace apogee {
             }
             let missing = fields.filter(fn(f: string) => !known.contains(f));
             self.lock.unlock();
-            if (missing.size() == 0) { return; }
+            if (missing.isEmpty()) { return; }
             let current = self.req().get(self.host + "/indexes/" + self.uid(index) + "/settings/filterable-attributes");
             let all = new HashSet<string>();
             if (current.ok() && current.json().isArray()) { for (v in current.json().asArray()) { all.add(v.asString()); } }
@@ -111,7 +111,7 @@ namespace apogee {
             let attrs = Json.array();
             attrs.push("id");
             body.set("attributesToRetrieve", attrs);
-            if (q.filters.size() > 0) {
+            if (!q.filters.isEmpty()) {
                 self.ensureFilterable(index, q.filters.keys());
                 let all = Json.array();
                 for ((f, values) in q.filters) {

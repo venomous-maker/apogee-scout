@@ -152,7 +152,7 @@ namespace apogee {
                 let postings = w.getOr(t, null);
                 if (postings != null) {
                     postings.remove(id)
-                    if (postings.size() == 0) { w.remove(t); }
+                    if (postings.isEmpty()) { w.remove(t); }
                 }
             }
             d.remove(id);
@@ -170,7 +170,7 @@ namespace apogee {
             let d = self.index(index);
             let w = self.words.get(index);
             let scores = new HashMap<string, int>();
-            if (terms.size() == 0) {
+            if (terms.isEmpty()) {
                 for ((id, _) in d) { scores.put(id, 0); }
             } else {
                 for (i, t in terms) {
@@ -248,7 +248,7 @@ namespace apogee {
             });
         }
         fn update(index: string, docs: Array<SearchDocument>) {
-            if (docs.size() == 0) { return; }
+            if (docs.isEmpty()) { return; }
             self.with(fn(c: Connection) {
                 c.transaction(fn() {
                     for (doc in docs) {
@@ -274,7 +274,7 @@ namespace apogee {
             self.with(fn(c: Connection) {
                 let sql = "";
                 let args = new Array<any>();
-                if (terms.size() == 0) {
+                if (terms.isEmpty()) {
                     sql = "SELECT doc_id, fields FROM " + self.table + " WHERE index_name = ? ORDER BY doc_id";
                     args.push(index);
                 } else if (c.driver() == "sqlite") {
@@ -300,7 +300,7 @@ namespace apogee {
                 }
                 let matched = new Array<string>();
                 for (row in c.query(sql, args)) {
-                    if (q.filters.size() == 0 || q.passesJson(Json.tryParse(row.getString("fields")))) { matched.push(row.getString("doc_id")); }
+                    if (q.filters.isEmpty() || q.passesJson(Json.tryParse(row.getString("fields")))) { matched.push(row.getString("doc_id")); }
                 }
                 res.total = matched.size() as long;
                 for (i in q.offset..matched.size()) { if (res.ids.size() < q.limit) { res.ids.push(matched[i]); } }

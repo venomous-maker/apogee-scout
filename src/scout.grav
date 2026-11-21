@@ -98,7 +98,7 @@ namespace apogee {
             self.query.limit = 1;
             let found = self.get();
             self.query.limit = limit;
-            return found.size() == 0 ? null : found[0];
+            return found.isEmpty() ? null : found[0];
         }
         // Page `page` (from 1) of `perPage`.
         fn paginate(perPage: int, page: int = 1) -> SearchPage<T> {
@@ -172,7 +172,7 @@ namespace apogee {
         // Models of class M by id, in the order of `ids` (ones gone since are left out).
         static fn load<M>(ids: Array<string>) -> Array<M> {
             let out = new Array<M>();
-            if (ids.size() == 0) { return out; }
+            if (ids.isEmpty()) { return out; }
             let keys = new Array<any>();
             for (id in ids) { keys.push(Scout.keyValue(id)); }
             let byId = new HashMap<string, M>();
@@ -215,7 +215,7 @@ namespace apogee {
                     docs.push(Scout.documentOf(m));
                 }
                 Scout.engine.update(index, docs);
-                if (gone.size() > 0) { Scout.engine.delete(index, gone); }
+                if (!gone.isEmpty()) { Scout.engine.delete(index, gone); }
                 n += docs.size() as long;
             });
             return n;
