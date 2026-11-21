@@ -1,0 +1,285 @@
+// engines.grav — where apogee-scout keeps its search indexes: in memory, in
+// the app's own database (SQLite FTS5, PostgreSQL full-text search, MySQL
+// FULLTEXT), or in Meilisearch (meilisearch.grav).
+import "std"
+import "grav-db"
+use db.*
+
+namespace apogee {
+
+    // A record as an index keeps it: its id and its fields (all of them are
+    // searched; filters compare them too).
+    class SearchDocument {
+        public id: string
+        public fields: HashMap<string, any>
+        constructor(id: string, fields: HashMap<string, any>) { self.id = id; self.fields = fields; }
+        // The searchable text: every field's value, in order.
+        fn text() -> string {
+            let parts = new Array<string>();
+            for ((_, v) in self.fields) { if (v != null) { parts.push(str(v)); } }
+            return Str.join(parts, " ");
+        }
+        fn fieldsJson() -> string {
+            let o = Json.object();
+            for ((k, v) in self.fields) {
+                if (v == null) { o.set(k, Json.nil()); }
+                else if (v is bool) { o.set(k, v as bool); }
+                else if (v is long) { o.set(k, v as long); }
+                else if (v is int) { o.set(k, (v as int) as long); }
+                else if (v is float || v is double) { o.set(k, Float.parseOr(str(v), 0.0)); }
+                else { o.set(k, str(v)); }
+            }
+            return o.toJson();
+        }
+    }
+
+    // What to look for: words, filters on fields, a page.
+    class SearchQuery {
+        public text: string
+        // field -> the values it may have (one value: equality)
+        public filters: HashMap<string, Array<string>> = new HashMap<string, Array<string>>()
+        public limit: int = 20
+        public offset: int = 0
+        constructor(text: string) { self.text = text; }
+        // Whether a document's fields pass the filters (compared as text).
+        fn passes(fields: HashMap<string, any>) -> bool {
+            for ((f, allowed) in self.filters) {
+                let v = fields.getOr(f, null);
+                if (v == null || !allowed.contains(SearchQuery.text(v))) { return false; }
+            }
+            return true;
+        }
+        fn passesJson(fields: JsonValue) -> bool {
+            for ((f, allowed) in self.filters) {
+                if (fields == null || !fields.has(f)) { return false; }
+                let v = fields.get(f);
+                let t = v.isString() ? v.asString() : (v.isBool() ? (v.asBool() ? "true" : "false") : v.toJson());
+                if (!allowed.contains(t)) { return false; }
+            }
+            return true;
+        }
+        static fn text(v: any) -> string {
+            if (v is bool) { return (v as bool) ? "true" : "false"; }
+            return str(v);
+        }
+    }
+
+    // Ids that matched, best first, and how many matched in all.
+    class SearchResult {
+        public ids: Array<string> = new Array<string>()
+        public total: long = 0
+    }
+
+    interface SearchEngine {
+        // Adds or replaces documents.
+        fn update(index: string, docs: Array<SearchDocument>)
+        fn delete(index: string, ids: Array<string>)
+        fn search(index: string, q: SearchQuery) -> SearchResult
+        // Empties the index.
+        fn flush(index: string)
+    }
+
+    // Words of a text for matching: lower-cased runs of letters and digits
+    // (bytes past ASCII count as letters, so UTF-8 words stay whole).
+    class Tokens {
+        static fn of(text: string) -> Array<string> {
+            let out = new Array<string>();
+            let sb = new StringBuilder();
+            for (i in 0..text.length) {
+                let c = text[i] as int;
+                let word = (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || c >= 128;
+                if (c >= 65 && c <= 90) { c += 32; word = true; }
+                if (word) { sb.appendChar(c); }
+                else if (sb.length() > 0) { out.push(sb.toString()); sb = new StringBuilder(); }
+            }
+            if (sb.length() > 0) { out.push(sb.toString()); }
+            return out;
+        }
+    }
+
+    // Indexes in this process's memory: an inverted index per index name. Every
+    // word must match; the last may be the start of a word (search as you type).
+    // Results by how often the words occur, then by id. Thread-safe.
+    class MemoryEngine implements SearchEngine {
+        private docs: HashMap<string, HashMap<string, SearchDocument>> = new HashMap<string, HashMap<string, SearchDocument>>()
+        private words: HashMap<string, HashMap<string, HashMap<string, int>>> = new HashMap<string, HashMap<string, HashMap<string, int>>>()
+        private lock: Mutex = new Mutex()
+
+        private fn index(name: string) -> HashMap<string, SearchDocument> {
+            let d = self.docs.getOr(name, null);
+            if (d == null) { d = new HashMap<string, SearchDocument>(); self.docs.put(name, d); self.words.put(name, new HashMap<string, HashMap<string, int>>()); }
+            return d;
+        }
+        fn update(index: string, docs: Array<SearchDocument>) {
+            self.lock.lock();
+            let d = self.index(index);
+            let w = self.words.get(index);
+            for (doc in docs) {
+                self.unindex(index, doc.id);
+                d.put(doc.id, doc);
+                for (t in Tokens.of(doc.text())) {
+                    let postings = w.getOr(t, null);
+                    if (postings == null) { postings = new HashMap<string, int>(); w.put(t, postings); }
+                    postings.put(doc.id, postings.getOr(doc.id, 0) + 1);
+                }
+            }
+            self.lock.unlock();
+        }
+        private fn unindex(index: string, id: string) {
+            let d = self.docs.get(index);
+            let old = d.getOr(id, null);
+            if (old == null) { return; }
+            let w = self.words.get(index);
+            for (t in Tokens.of(old.text())) {
+                let postings = w.getOr(t, null);
+                if (postings != null) { postings.remove(id); if (postings.size() == 0) { w.remove(t); } }
+            }
+            d.remove(id);
+        }
+        fn delete(index: string, ids: Array<string>) {
+            self.lock.lock();
+            self.index(index);
+            for (id in ids) { self.unindex(index, id); }
+            self.lock.unlock();
+        }
+        fn search(index: string, q: SearchQuery) -> SearchResult {
+            let res = new SearchResult();
+            let terms = Tokens.of(q.text);
+            self.lock.lock();
+            let d = self.index(index);
+            let w = self.words.get(index);
+            let scores = new HashMap<string, int>();
+            if (terms.size() == 0) {
+                for ((id, _) in d) { scores.put(id, 0); }
+            } else {
+                for (i, t in terms) {
+                    let hits = new HashMap<string, int>();
+                    let last = i == terms.size() - 1;
+                    if (last) {
+                        for ((word, postings) in w) {
+                            if (Str.startsWith(word, t)) { for ((id, n) in postings) { hits.put(id, hits.getOr(id, 0) + n); } }
+                        }
+                    } else {
+                        let postings = w.getOr(t, null);
+                        if (postings != null) { for ((id, n) in postings) { hits.put(id, n); } }
+                    }
+                    if (i == 0) { scores = hits; }
+                    else {
+                        let both = new HashMap<string, int>();
+                        for ((id, n) in scores) { if (hits.containsKey(id)) { both.put(id, n + hits.get(id)); } }
+                        scores = both;
+                    }
+                }
+            }
+            let matched = new Array<string>();
+            for ((id, _) in scores) { if (q.passes(d.get(id).fields)) { matched.push(id); } }
+            self.lock.unlock();
+            matched.sortBy(fn(a: string, b: string) -> int {
+                let sa = scores.get(a);
+                let sb = scores.get(b);
+                return sa != sb ? sb - sa : Str.compare(a, b);
+            });
+            res.total = matched.size() as long;
+            for (i in q.offset..matched.size()) { if (res.ids.size() < q.limit) { res.ids.push(matched[i]); } }
+            return res;
+        }
+        fn flush(index: string) {
+            self.lock.lock();
+            self.docs.remove(index);
+            self.words.remove(index);
+            self.lock.unlock();
+        }
+    }
+
+    // Indexes in the app's database: SQLite FTS5 (ranked by bm25), PostgreSQL
+    // full-text search (tsvector, ranked by ts_rank) or MySQL FULLTEXT (boolean
+    // mode). Every word must match; the last may be a prefix. Filters are applied
+    // to the stored fields of the matches. createTables() makes what it needs.
+    class DatabaseEngine implements SearchEngine {
+        public table: string
+        private pool: Pool
+        private driver: string = ""
+        constructor(pool: Pool, table: string = "scout_index") { self.pool = pool; self.table = table; }
+        private fn with(f: fn(Connection)) {
+            let c = self.pool.acquire();
+            if (self.driver == "") { self.driver = c.driver(); }
+            try { f(c); } finally { self.pool.release(c); }
+        }
+        fn createTables() {
+            self.with(fn(c: Connection) {
+                let d = c.driver();
+                if (d == "sqlite") {
+                    c.exec("CREATE VIRTUAL TABLE IF NOT EXISTS " + self.table + " USING fts5(index_name UNINDEXED, doc_id UNINDEXED, content, " +
+                           "fields UNINDEXED, tokenize = 'unicode61 remove_diacritics 2')");
+                } else if (d == "postgres") {
+                    c.exec("CREATE TABLE IF NOT EXISTS " + self.table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
+                           "content TEXT NOT NULL, fields TEXT NOT NULL, tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED, " +
+                           "PRIMARY KEY (index_name, doc_id))");
+                    c.exec("CREATE INDEX IF NOT EXISTS " + self.table + "_tsv ON " + self.table + " USING GIN (tsv)");
+                } else {
+                    c.exec("CREATE TABLE IF NOT EXISTS " + self.table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
+                           "content LONGTEXT NOT NULL, fields LONGTEXT NOT NULL, PRIMARY KEY (index_name, doc_id), FULLTEXT KEY " +
+                           self.table + "_content (content)) ENGINE=InnoDB");
+                }
+            });
+        }
+        fn update(index: string, docs: Array<SearchDocument>) {
+            if (docs.size() == 0) { return; }
+            self.with(fn(c: Connection) {
+                c.transaction(fn() {
+                    for (doc in docs) {
+                        c.execute("DELETE FROM " + self.table + " WHERE index_name = ? AND doc_id = ?", [index, doc.id]);
+                        c.execute("INSERT INTO " + self.table + " (index_name, doc_id, content, fields) VALUES (?, ?, ?, ?)",
+                                  [index, doc.id, doc.text(), doc.fieldsJson()]);
+                    }
+                });
+            });
+        }
+        fn delete(index: string, ids: Array<string>) {
+            self.with(fn(c: Connection) {
+                c.transaction(fn() { for (id in ids) { c.execute("DELETE FROM " + self.table + " WHERE index_name = ? AND doc_id = ?", [index, id]); } });
+            });
+        }
+        fn flush(index: string) { self.with(fn(c: Connection) { c.execute("DELETE FROM " + self.table + " WHERE index_name = ?", [index]); }); }
+
+        fn search(index: string, q: SearchQuery) -> SearchResult {
+            let res = new SearchResult();
+            let terms = Tokens.of(q.text);
+            self.with(fn(c: Connection) {
+                let sql = "";
+                let args = new Array<any>();
+                if (terms.size() == 0) {
+                    sql = "SELECT doc_id, fields FROM " + self.table + " WHERE index_name = ? ORDER BY doc_id";
+                    args.push(index);
+                } else if (c.driver() == "sqlite") {
+                    let parts = new Array<string>();
+                    for (i, t in terms) { parts.push("\"" + t + "\"" + (i == terms.size() - 1 ? "*" : "")); }
+                    sql = "SELECT doc_id, fields FROM " + self.table + " WHERE " + self.table + " MATCH ? AND index_name = ? ORDER BY bm25(" + self.table + ")";
+                    args.push("content: " + Str.join(parts, " "));
+                    args.push(index);
+                } else if (c.driver() == "postgres") {
+                    let parts = new Array<string>();
+                    for (i, t in terms) { parts.push(t + (i == terms.size() - 1 ? ":*" : "")); }
+                    sql = "SELECT doc_id, fields FROM " + self.table + " WHERE index_name = ? AND tsv @@ to_tsquery('simple', ?) " +
+                          "ORDER BY ts_rank(tsv, to_tsquery('simple', ?)) DESC";
+                    let tq = Str.join(parts, " & ");
+                    args.push(index); args.push(tq); args.push(tq);
+                } else {
+                    let parts = new Array<string>();
+                    for (i, t in terms) { parts.push("+" + t + (i == terms.size() - 1 ? "*" : "")); }
+                    let bq = Str.join(parts, " ");
+                    sql = "SELECT doc_id, fields FROM " + self.table + " WHERE index_name = ? AND MATCH(content) AGAINST(? IN BOOLEAN MODE) " +
+                          "ORDER BY MATCH(content) AGAINST(? IN BOOLEAN MODE) DESC";
+                    args.push(index); args.push(bq); args.push(bq);
+                }
+                let matched = new Array<string>();
+                for (row in c.query(sql, args)) {
+                    if (q.filters.size() == 0 || q.passesJson(Json.tryParse(row.getString("fields")))) { matched.push(row.getString("doc_id")); }
+                }
+                res.total = matched.size() as long;
+                for (i in q.offset..matched.size()) { if (res.ids.size() < q.limit) { res.ids.push(matched[i]); } }
+            });
+            return res;
+        }
+    }
+}
