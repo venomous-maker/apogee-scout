@@ -1,0 +1,9 @@
+name = "apogee-scout"
+lib = "src/all.grav"
+grav = ">=1.10.1"
+paths = ["src"]
+
+[dependencies]
+grav-orbit = "github.com/venomous-maker/grav-orbit@v0.2.0"
+grav-db = "github.com/venomous-maker/grav-db@v0.2.0"
+apogee-http-client = "github.com/venomous-maker/apogee-http-client@v0.1.0"
