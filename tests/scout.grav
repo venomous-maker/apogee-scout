@@ -1,0 +1,131 @@
+// apogee-scout's tests: Orbit models on SQLite, searched through the memory
+// engine and the database engine (SQLite FTS5) the same way: saves and deletes
+// keep the index in step, results come back as models best first, filters,
+// pages, prefixes, import, flush, models that stay out, syncing off. The
+// Meilisearch test needs a server (MEILI_URL; skipped without it).
+import "std"
+import "grav-orbit"
+import "../src/all.grav"
+use apogee.*
+use orbit.*
+
+class Article extends Model implements Searchable, ConditionallySearchable {
+    public id: long = 0
+    public title: string = ""
+    public body: string = ""
+    public category: string = ""
+    public draft: bool = false
+    fn toSearchableArray() -> HashMap<string, any> {
+        let m = new HashMap<string, any>()
+        m.put("title", self.title)
+        m.put("body", self.body)
+        m.put("category", self.category)
+        return m
+    }
+    fn shouldBeSearchable() -> bool { return !self.draft }
+}
+
+fn article(title: string, body: string, category: string, draft: bool = false) -> Article {
+    let a = new Article()
+    a.title = title
+    a.body = body
+    a.category = category
+    a.draft = draft
+    a.save()
+    return a
+}
+
+fn titles(xs: Array<Article>) -> string { return Str.join(xs.mapTo(fn(a: Article) => a.title), " | ") }
+
+fn database(name: string) -> string {
+    let file = Dir.temp() + "/scout_test_" + str(Process.pid()) + "_" + name + ".sqlite"
+    new File(file).delete()
+    DB.connect(Sqlite.open(file))
+    Article.createTable()
+    return file
+}
+
+fn exercise(engine: SearchEngine) {
+    Scout.use(engine)
+    Scout.flushAll::<Article>()
+    let grav = article("Grav compiles to C", "A compiler written in C++ that turns Grav into fast C.", "languages")
+    article("Writing a compiler", "Parsers, type checkers and code generators, step by step.", "languages")
+    article("Baking sourdough", "Flour, water, salt and patience. No compiler needed.", "food")
+    article("Secret plans", "A compiler for cakes.", "food", true)            // a draft: stays out
+    // ranked: both words in the first, one in the others
+    let found = Scout.search::<Article>("compiler grav").get()
+    assertEq(titles(found), "Grav compiles to C")
+    let any = Scout.search::<Article>("compiler").get()
+    assertEq(any.size(), 3)
+    assert(!titles(any).contains("Secret"))
+    // as you type: the last word is a prefix
+    assertEq(Scout.search::<Article>("sourd").get().size(), 1)
+    // filters, counts, pages
+    assertEq(titles(Scout.search::<Article>("compiler").where("category", "food").get()), "Baking sourdough")
+    assertEq(Scout.search::<Article>("compiler").whereIn("category", ["food", "languages"] as Array<any>).count(), 3 as long)
+    let page = Scout.search::<Article>("compiler").paginate(2, 2)
+    assertEq(page.items.size(), 1)
+    assertEq(page.total, 3 as long)
+    assertEq(page.lastPage, 2)
+    assert(!page.hasMore())
+    assertEq(Scout.search::<Article>("compiler").take(1).keys().size(), 1)
+    assertEq(Scout.search::<Article>("").count(), 3 as long)                // nothing typed: everything
+    // saves and deletes keep it in step
+    grav.title = "Grav emits C"
+    grav.body = "Nothing about that word anymore."
+    grav.save()
+    assertEq(Scout.search::<Article>("compiler").count(), 2 as long)
+    assertEq(Scout.search::<Article>("emits").first().title, "Grav emits C")
+    grav.delete()
+    assertEq(Scout.search::<Article>("emits").count(), 0 as long)
+    // a draft published joins; syncing off leaves the index alone
+    let secret = Article.where("title", "Secret plans").first()
+    secret.draft = false
+    secret.save()
+    assertEq(Scout.search::<Article>("cakes").count(), 1 as long)
+    Scout.withoutSyncing(fn() { article("Quiet arrival", "unindexed words", "misc") })
+    assertEq(Scout.search::<Article>("unindexed").count(), 0 as long)
+    // import puts everything in; flush empties it
+    Scout.flushAll::<Article>()
+    assertEq(Scout.search::<Article>("").count(), 0 as long)
+    assertEq(Scout.importAll::<Article>(2), 4 as long)
+    assertEq(Scout.search::<Article>("unindexed").count(), 1 as long)
+    // a deleted row the index still has is left out of the models
+    Scout.withoutSyncing(fn() { Article.where("title", "Quiet arrival").first().delete() })
+    assertEq(Scout.search::<Article>("unindexed").get().size(), 0)
+}
+
+test "the memory engine" {
+    Scout.observe::<Article>()
+    let file = database("memory")
+    exercise(new MemoryEngine())
+    new File(file).delete()
+}
+
+test "the database engine (SQLite FTS5)" {
+    let file = database("fts")
+    let engine = new DatabaseEngine(new Pool(2, fn() -> Connection { return Sqlite.open(file) }))
+    engine.createTables()
+    engine.createTables()
+    exercise(engine)
+    new File(file).delete()
+}
+
+test "index names take the prefix; documents and tokens" {
+    Scout.prefix = "test_"
+    assertEq(Scout.indexOf::<Article>(), "test_" + TableMap.of(reflect(Article)).table)
+    Scout.prefix = ""
+    assertEq(Str.join(Tokens.of("Héllo, World-42 c++"), " "), "héllo world 42 c")
+    assertEq(Scout.keyValue("17") as long, 17 as long)
+    assertEq(Scout.keyValue("ab-1") as string, "ab-1")
+}
+
+test "Meilisearch (needs MEILI_URL)" {
+    let url = env("MEILI_URL")
+    if (url == "") { println("  (skipped: MEILI_URL is not set)"); return }
+    let file = database("meili")
+    Scout.prefix = "scout_test_" + str(Process.pid()) + "_"
+    exercise(new MeilisearchEngine(url, env("MEILI_KEY"), true))
+    Scout.prefix = ""
+    new File(file).delete()
+}
