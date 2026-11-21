@@ -1,0 +1,188 @@
+// scout.grav — full-text search for Orbit models: a model's searchable fields
+// go into an index when it is saved (and leave when it is deleted), and a
+// search gives back the models, best match first.
+//
+//   class Post extends Model implements Searchable {
+//       public id: long = 0
+//       public title: string = ""
+//       public body: string = ""
+//       public published: bool = false
+//       fn toSearchableArray() -> HashMap<string, any> { return {"title": self.title, "body": self.body, "published": self.published} }
+//   }
+//
+//   Scout.use(new DatabaseEngine(pool))          // or MemoryEngine, MeilisearchEngine
+//   Scout.observe::<Post>()                      // keep the index in step with saves and deletes
+//   Scout.importAll::<Post>()                    // index what is already there
+//   let posts = Scout.search::<Post>("grav compiler").where("published", true).take(10).get()
+import "std"
+import "grav-orbit"
+import "engines.grav"
+use orbit.*
+
+namespace apogee {
+
+    // A model that says what of it is searched (else all its fields are).
+    interface Searchable {
+        fn toSearchableArray() -> HashMap<string, any>
+    }
+    // A model that may stay out of the index (a draft, say).
+    interface ConditionallySearchable {
+        fn shouldBeSearchable() -> bool
+    }
+
+    // Keeps an index in step with a model class's saves and deletes.
+    class ScoutObserver extends Behavior {
+        constructor() {}
+        fn saved(m: Model, d: Decorator) { if (Scout.syncing) { Scout.makeSearchable(m); } }
+        fn deleted(m: Model, d: Decorator) { if (Scout.syncing) { Scout.unsearchable(m); } }
+        fn forceDeleted(m: Model, d: Decorator) { if (Scout.syncing) { Scout.unsearchable(m); } }
+    }
+
+    // A search being built for models of class T.
+    class SearchBuilder<T> {
+        public index: string
+        public query: SearchQuery
+        constructor(index: string, text: string) { self.index = index; self.query = new SearchQuery(text); }
+        // Only documents whose `field` equals `value`.
+        fn where(field: string, value: any) -> SearchBuilder<T> {
+            let vs = new Array<string>();
+            vs.push(SearchQuery.text(value));
+            self.query.filters.put(field, vs);
+            return self;
+        }
+        // Only documents whose `field` is one of `values`.
+        fn whereIn(field: string, values: Array<any>) -> SearchBuilder<T> {
+            let vs = new Array<string>();
+            for (v in values) { vs.push(SearchQuery.text(v)); }
+            self.query.filters.put(field, vs);
+            return self;
+        }
+        fn take(n: int) -> SearchBuilder<T> { self.query.limit = n; return self; }
+        fn skip(n: int) -> SearchBuilder<T> { self.query.offset = n; return self; }
+        // The engine's answer: ids best first, and the total.
+        fn raw() -> SearchResult { return Scout.engine.search(self.index, self.query); }
+        fn keys() -> Array<string> { return self.raw().ids; }
+        fn count() -> long {
+            let q = self.query;
+            let limit = q.limit;
+            q.limit = 0;
+            let n = Scout.engine.search(self.index, q).total;
+            q.limit = limit;
+            return n;
+        }
+        // The models, best match first (ones deleted since they were indexed are left out).
+        fn get() -> Array<T> { return Scout.load::<T>(self.raw().ids); }
+        fn first() -> T {
+            let limit = self.query.limit;
+            self.query.limit = 1;
+            let found = self.get();
+            self.query.limit = limit;
+            return found.size() == 0 ? null : found[0];
+        }
+        // Page `page` (from 1) of `perPage`.
+        fn paginate(perPage: int, page: int = 1) -> SearchPage<T> {
+            self.query.limit = perPage;
+            self.query.offset = (page < 1 ? 0 : page - 1) * perPage;
+            let r = self.raw();
+            let p = new SearchPage<T>();
+            p.items = Scout.load::<T>(r.ids);
+            p.total = r.total;
+            p.perPage = perPage;
+            p.page = page < 1 ? 1 : page;
+            p.lastPage = r.total == 0 ? 1 : ((r.total + perPage - 1) / perPage) as int;
+            return p;
+        }
+    }
+
+    // A page of results.
+    class SearchPage<T> {
+        public items: Array<T> = new Array<T>()
+        public total: long = 0
+        public page: int = 1
+        public perPage: int = 20
+        public lastPage: int = 1
+        fn hasMore() -> bool { return self.page < self.lastPage; }
+    }
+
+    // The app's search, as statics.
+    class Scout {
+        static engine: SearchEngine = new MemoryEngine()
+        // Put before every index name ("prod_", say, to share a search server).
+        static prefix: string = ""
+        // Whether saves and deletes update the index (Scout.withoutSyncing turns it off for a while).
+        static syncing: bool = true
+
+        static fn use(e: SearchEngine) { Scout.engine = e; }
+        // The index name of a model's class: the prefix and its table.
+        static fn indexOfInfo(info: ClassInfo) -> string { return Scout.prefix + TableMap.of(info).table; }
+        static fn indexOf<T>() -> string { return Scout.indexOfInfo(reflect(T)); }
+        // A model's id, as text.
+        static fn idOf(m: any) -> string {
+            let map = TableMap.of(ClassInfo.of(m));
+            return str(map.id.field.get(m));
+        }
+        // An id as the database keys it: a number when it is all digits.
+        static fn keyValue(id: string) -> any {
+            if (id == "") { return id; }
+            for (i in 0..id.length) { let c = id[i] as int; if (c < 48 || c > 57) { return id; } }
+            return Integer.parseOr(id, 0);
+        }
+        // What of a model goes in the index.
+        static fn documentOf(m: any) -> SearchDocument {
+            let fields = m is Searchable ? (m as Searchable).toSearchableArray() : (m as Model).toMap();
+            return new SearchDocument(Scout.idOf(m), fields);
+        }
+
+        // Keeps T's index in step with saves and deletes.
+        static fn observe<T>() { Observers.register(reflect(T).name, new ScoutObserver()); }
+        // Models of class M by id, in the order of `ids` (ones gone since are left out).
+        static fn load<M>(ids: Array<string>) -> Array<M> {
+            let out = new Array<M>();
+            if (ids.size() == 0) { return out; }
+            let keys = new Array<any>();
+            for (id in ids) { keys.push(Scout.keyValue(id)); }
+            let byId = new HashMap<string, M>();
+            for (m in new Query<M>(TableMap.of(reflect(M))).findMany(keys)) { byId.put(Scout.idOf(m), m); }
+            for (id in ids) { let m = byId.getOr(id, null); if (m != null) { out.push(m); } }
+            return out;
+        }
+        static fn search<T>(text: string) -> SearchBuilder<T> { return new SearchBuilder<T>(Scout.indexOf::<T>(), text); }
+        // Puts a model in its index (or takes it out, when it should not be searchable).
+        static fn makeSearchable(m: any) {
+            let index = Scout.indexOfInfo(ClassInfo.of(m));
+            if (m is ConditionallySearchable && !(m as ConditionallySearchable).shouldBeSearchable()) {
+                Scout.engine.delete(index, [Scout.idOf(m)] as Array<string>);
+                return;
+            }
+            let docs = new Array<SearchDocument>();
+            docs.push(Scout.documentOf(m));
+            Scout.engine.update(index, docs);
+        }
+        static fn unsearchable(m: any) { Scout.engine.delete(Scout.indexOfInfo(ClassInfo.of(m)), [Scout.idOf(m)] as Array<string>); }
+        // Indexes every T, `chunk` at a time; how many went in.
+        static fn importAll<T>(chunk: int = 500) -> long {
+            let index = Scout.indexOf::<T>();
+            let n: long = 0;
+            new Query<T>(TableMap.of(reflect(T))).chunkById(chunk, fn(models: Array<T>) {
+                let docs = new Array<SearchDocument>();
+                let gone = new Array<string>();
+                for (m in models) {
+                    if (m is ConditionallySearchable && !(m as ConditionallySearchable).shouldBeSearchable()) { gone.push(Scout.idOf(m)); continue; }
+                    docs.push(Scout.documentOf(m));
+                }
+                Scout.engine.update(index, docs);
+                if (gone.size() > 0) { Scout.engine.delete(index, gone); }
+                n += docs.size() as long;
+            });
+            return n;
+        }
+        // Empties T's index.
+        static fn flushAll<T>() { Scout.engine.flush(Scout.indexOf::<T>()); }
+        // Runs `f` with saves and deletes not touching the index.
+        static fn withoutSyncing(f: fn()) {
+            let was = Scout.syncing;
+            Scout.syncing = false;
+            try { f(); } finally { Scout.syncing = was; }
+        }
+    }
+}
