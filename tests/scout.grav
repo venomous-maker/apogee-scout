@@ -22,7 +22,9 @@ class Article extends Model implements Searchable, ConditionallySearchable {
         m.put("category", self.category)
         return m
     }
-    fn shouldBeSearchable() -> bool { return !self.draft }
+    fn shouldBeSearchable() -> bool {
+        return !self.draft
+    }
 }
 
 fn article(title: string, body: string, category: string, draft: bool = false) -> Article {
@@ -35,7 +37,9 @@ fn article(title: string, body: string, category: string, draft: bool = false) -
     return a
 }
 
-fn titles(xs: Array<Article>) -> string { return Str.join(xs.mapTo(fn(a: Article) => a.title), " | ") }
+fn titles(xs: Array<Article>) -> string {
+    return Str.join(xs.mapTo(fn(a: Article) => a.title), " | ")
+}
 
 fn database(name: string) -> string {
     let file = Dir.temp() + "/scout_test_" + str(Process.pid()) + "_" + name + ".sqlite"
@@ -122,7 +126,10 @@ test "index names take the prefix; documents and tokens" {
 
 test "Meilisearch (needs MEILI_URL)" {
     let url = env("MEILI_URL")
-    if (url == "") { println("  (skipped: MEILI_URL is not set)"); return }
+    if (url == "") {
+        println("  (skipped: MEILI_URL is not set)")
+        return
+    }
     let file = database("meili")
     Scout.prefix = "scout_test_" + str(Process.pid()) + "_"
     exercise(new MeilisearchEngine(url, env("MEILI_KEY"), true))

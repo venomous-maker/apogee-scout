@@ -12,7 +12,10 @@ namespace apogee {
     class SearchDocument {
         public id: string
         public fields: HashMap<string, any>
-        constructor(id: string, fields: HashMap<string, any>) { self.id = id; self.fields = fields; }
+        constructor(id: string, fields: HashMap<string, any>) {
+            self.id = id
+            self.fields = fields
+        }
         // The searchable text: every field's value, in order.
         fn text() -> string {
             let parts = new Array<string>();
@@ -40,7 +43,9 @@ namespace apogee {
         public filters: HashMap<string, Array<string>> = new HashMap<string, Array<string>>()
         public limit: int = 20
         public offset: int = 0
-        constructor(text: string) { self.text = text; }
+        constructor(text: string) {
+            self.text = text;
+        }
         // Whether a document's fields pass the filters (compared as text).
         fn passes(fields: HashMap<string, any>) -> bool {
             for ((f, allowed) in self.filters) {
@@ -88,9 +93,15 @@ namespace apogee {
             for (i in 0..text.length) {
                 let c = text[i] as int;
                 let word = (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || c >= 128;
-                if (c >= 65 && c <= 90) { c += 32; word = true; }
+                if (c >= 65 && c <= 90) {
+                    c += 32
+                    word = true
+                }
                 if (word) { sb.appendChar(c); }
-                else if (sb.length() > 0) { out.push(sb.toString()); sb = new StringBuilder(); }
+                else if (sb.length() > 0) {
+                    out.push(sb.toString())
+                    sb = new StringBuilder()
+                }
             }
             if (sb.length() > 0) { out.push(sb.toString()); }
             return out;
@@ -107,7 +118,11 @@ namespace apogee {
 
         private fn index(name: string) -> HashMap<string, SearchDocument> {
             let d = self.docs.getOr(name, null);
-            if (d == null) { d = new HashMap<string, SearchDocument>(); self.docs.put(name, d); self.words.put(name, new HashMap<string, HashMap<string, int>>()); }
+            if (d == null) {
+                d = new HashMap<string, SearchDocument>()
+                self.docs.put(name, d)
+                self.words.put(name, new HashMap<string, HashMap<string, int>>())
+            }
             return d;
         }
         fn update(index: string, docs: Array<SearchDocument>) {
@@ -119,7 +134,10 @@ namespace apogee {
                 d.put(doc.id, doc);
                 for (t in Tokens.of(doc.text())) {
                     let postings = w.getOr(t, null);
-                    if (postings == null) { postings = new HashMap<string, int>(); w.put(t, postings); }
+                    if (postings == null) {
+                        postings = new HashMap<string, int>()
+                        w.put(t, postings)
+                    }
                     postings.put(doc.id, postings.getOr(doc.id, 0) + 1);
                 }
             }
@@ -132,7 +150,10 @@ namespace apogee {
             let w = self.words.get(index);
             for (t in Tokens.of(old.text())) {
                 let postings = w.getOr(t, null);
-                if (postings != null) { postings.remove(id); if (postings.size() == 0) { w.remove(t); } }
+                if (postings != null) {
+                    postings.remove(id)
+                    if (postings.size() == 0) { w.remove(t); }
+                }
             }
             d.remove(id);
         }
@@ -199,7 +220,10 @@ namespace apogee {
         public table: string
         private pool: Pool
         private driver: string = ""
-        constructor(pool: Pool, table: string = "scout_index") { self.pool = pool; self.table = table; }
+        constructor(pool: Pool, table: string = "scout_index") {
+            self.pool = pool
+            self.table = table
+        }
         private fn with(f: fn(Connection)) {
             let c = self.pool.acquire();
             if (self.driver == "") { self.driver = c.driver(); }
@@ -240,7 +264,9 @@ namespace apogee {
                 c.transaction(fn() { for (id in ids) { c.execute("DELETE FROM " + self.table + " WHERE index_name = ? AND doc_id = ?", [index, id]); } });
             });
         }
-        fn flush(index: string) { self.with(fn(c: Connection) { c.execute("DELETE FROM " + self.table + " WHERE index_name = ?", [index]); }); }
+        fn flush(index: string) {
+            self.with(fn(c: Connection) { c.execute("DELETE FROM " + self.table + " WHERE index_name = ?", [index]); });
+        }
 
         fn search(index: string, q: SearchQuery) -> SearchResult {
             let res = new SearchResult();

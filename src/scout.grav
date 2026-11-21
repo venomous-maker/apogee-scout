@@ -33,16 +33,25 @@ namespace apogee {
     // Keeps an index in step with a model class's saves and deletes.
     class ScoutObserver extends Behavior {
         constructor() {}
-        fn saved(m: Model, d: Decorator) { if (Scout.syncing) { Scout.makeSearchable(m); } }
-        fn deleted(m: Model, d: Decorator) { if (Scout.syncing) { Scout.unsearchable(m); } }
-        fn forceDeleted(m: Model, d: Decorator) { if (Scout.syncing) { Scout.unsearchable(m); } }
+        fn saved(m: Model, d: Decorator) {
+            if (Scout.syncing) { Scout.makeSearchable(m); }
+        }
+        fn deleted(m: Model, d: Decorator) {
+            if (Scout.syncing) { Scout.unsearchable(m); }
+        }
+        fn forceDeleted(m: Model, d: Decorator) {
+            if (Scout.syncing) { Scout.unsearchable(m); }
+        }
     }
 
     // A search being built for models of class T.
     class SearchBuilder<T> {
         public index: string
         public query: SearchQuery
-        constructor(index: string, text: string) { self.index = index; self.query = new SearchQuery(text); }
+        constructor(index: string, text: string) {
+            self.index = index
+            self.query = new SearchQuery(text)
+        }
         // Only documents whose `field` equals `value`.
         fn where(field: string, value: any) -> SearchBuilder<T> {
             let vs = new Array<string>();
@@ -57,11 +66,21 @@ namespace apogee {
             self.query.filters.put(field, vs);
             return self;
         }
-        fn take(n: int) -> SearchBuilder<T> { self.query.limit = n; return self; }
-        fn skip(n: int) -> SearchBuilder<T> { self.query.offset = n; return self; }
+        fn take(n: int) -> SearchBuilder<T> {
+            self.query.limit = n
+            return self
+        }
+        fn skip(n: int) -> SearchBuilder<T> {
+            self.query.offset = n
+            return self
+        }
         // The engine's answer: ids best first, and the total.
-        fn raw() -> SearchResult { return Scout.engine.search(self.index, self.query); }
-        fn keys() -> Array<string> { return self.raw().ids; }
+        fn raw() -> SearchResult {
+            return Scout.engine.search(self.index, self.query);
+        }
+        fn keys() -> Array<string> {
+            return self.raw().ids;
+        }
         fn count() -> long {
             let q = self.query;
             let limit = q.limit;
@@ -71,7 +90,9 @@ namespace apogee {
             return n;
         }
         // The models, best match first (ones deleted since they were indexed are left out).
-        fn get() -> Array<T> { return Scout.load::<T>(self.raw().ids); }
+        fn get() -> Array<T> {
+            return Scout.load::<T>(self.raw().ids);
+        }
         fn first() -> T {
             let limit = self.query.limit;
             self.query.limit = 1;
@@ -101,7 +122,9 @@ namespace apogee {
         public page: int = 1
         public perPage: int = 20
         public lastPage: int = 1
-        fn hasMore() -> bool { return self.page < self.lastPage; }
+        fn hasMore() -> bool {
+            return self.page < self.lastPage;
+        }
     }
 
     // The app's search, as statics.
@@ -112,10 +135,16 @@ namespace apogee {
         // Whether saves and deletes update the index (Scout.withoutSyncing turns it off for a while).
         static syncing: bool = true
 
-        static fn use(e: SearchEngine) { Scout.engine = e; }
+        static fn use(e: SearchEngine) {
+            Scout.engine = e;
+        }
         // The index name of a model's class: the prefix and its table.
-        static fn indexOfInfo(info: ClassInfo) -> string { return Scout.prefix + TableMap.of(info).table; }
-        static fn indexOf<T>() -> string { return Scout.indexOfInfo(reflect(T)); }
+        static fn indexOfInfo(info: ClassInfo) -> string {
+            return Scout.prefix + TableMap.of(info).table;
+        }
+        static fn indexOf<T>() -> string {
+            return Scout.indexOfInfo(reflect(T));
+        }
         // A model's id, as text.
         static fn idOf(m: any) -> string {
             let map = TableMap.of(ClassInfo.of(m));
@@ -124,7 +153,10 @@ namespace apogee {
         // An id as the database keys it: a number when it is all digits.
         static fn keyValue(id: string) -> any {
             if (id == "") { return id; }
-            for (i in 0..id.length) { let c = id[i] as int; if (c < 48 || c > 57) { return id; } }
+            for (i in 0..id.length) {
+                let c = id[i] as int
+                if (c < 48 || c > 57) { return id; }
+            }
             return Integer.parseOr(id, 0);
         }
         // What of a model goes in the index.
@@ -134,7 +166,9 @@ namespace apogee {
         }
 
         // Keeps T's index in step with saves and deletes.
-        static fn observe<T>() { Observers.register(reflect(T).name, new ScoutObserver()); }
+        static fn observe<T>() {
+            Observers.register(reflect(T).name, new ScoutObserver());
+        }
         // Models of class M by id, in the order of `ids` (ones gone since are left out).
         static fn load<M>(ids: Array<string>) -> Array<M> {
             let out = new Array<M>();
@@ -143,10 +177,15 @@ namespace apogee {
             for (id in ids) { keys.push(Scout.keyValue(id)); }
             let byId = new HashMap<string, M>();
             for (m in new Query<M>(TableMap.of(reflect(M))).findMany(keys)) { byId.put(Scout.idOf(m), m); }
-            for (id in ids) { let m = byId.getOr(id, null); if (m != null) { out.push(m); } }
+            for (id in ids) {
+                let m = byId.getOr(id, null)
+                if (m != null) { out.push(m); }
+            }
             return out;
         }
-        static fn search<T>(text: string) -> SearchBuilder<T> { return new SearchBuilder<T>(Scout.indexOf::<T>(), text); }
+        static fn search<T>(text: string) -> SearchBuilder<T> {
+            return new SearchBuilder<T>(Scout.indexOf::<T>(), text);
+        }
         // Puts a model in its index (or takes it out, when it should not be searchable).
         static fn makeSearchable(m: any) {
             let index = Scout.indexOfInfo(ClassInfo.of(m));
@@ -158,7 +197,9 @@ namespace apogee {
             docs.push(Scout.documentOf(m));
             Scout.engine.update(index, docs);
         }
-        static fn unsearchable(m: any) { Scout.engine.delete(Scout.indexOfInfo(ClassInfo.of(m)), [Scout.idOf(m)] as Array<string>); }
+        static fn unsearchable(m: any) {
+            Scout.engine.delete(Scout.indexOfInfo(ClassInfo.of(m)), [Scout.idOf(m)] as Array<string>);
+        }
         // Indexes every T, `chunk` at a time; how many went in.
         static fn importAll<T>(chunk: int = 500) -> long {
             let index = Scout.indexOf::<T>();
@@ -167,7 +208,10 @@ namespace apogee {
                 let docs = new Array<SearchDocument>();
                 let gone = new Array<string>();
                 for (m in models) {
-                    if (m is ConditionallySearchable && !(m as ConditionallySearchable).shouldBeSearchable()) { gone.push(Scout.idOf(m)); continue; }
+                    if (m is ConditionallySearchable && !(m as ConditionallySearchable).shouldBeSearchable()) {
+                        gone.push(Scout.idOf(m))
+                        continue
+                    }
                     docs.push(Scout.documentOf(m));
                 }
                 Scout.engine.update(index, docs);
@@ -177,7 +221,9 @@ namespace apogee {
             return n;
         }
         // Empties T's index.
-        static fn flushAll<T>() { Scout.engine.flush(Scout.indexOf::<T>()); }
+        static fn flushAll<T>() {
+            Scout.engine.flush(Scout.indexOf::<T>());
+        }
         // Runs `f` with saves and deletes not touching the index.
         static fn withoutSyncing(f: fn()) {
             let was = Scout.syncing;

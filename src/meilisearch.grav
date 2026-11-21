@@ -26,7 +26,9 @@ namespace apogee {
             if (self.key != "") { r.withToken(self.key); }
             return r;
         }
-        private fn uid(index: string) -> string { return Url.encode(index); }
+        private fn uid(index: string) -> string {
+            return Url.encode(index);
+        }
         // Waits for an asynchronous task (the response of a write) to finish.
         // (`missingIsFine`: an index that is not there is nothing to undo)
         private fn settle(res: ClientResponse, missingIsFine: bool = false) {
@@ -76,7 +78,10 @@ namespace apogee {
         private fn ensureFilterable(index: string, fields: Array<string>) {
             self.lock.lock();
             let known = self.filterable.getOr(index, null);
-            if (known == null) { known = new HashSet<string>(); self.filterable.put(index, known); }
+            if (known == null) {
+                known = new HashSet<string>()
+                self.filterable.put(index, known)
+            }
             let missing = fields.filter(fn(f: string) => !known.contains(f));
             self.lock.unlock();
             if (missing.size() == 0) { return; }
