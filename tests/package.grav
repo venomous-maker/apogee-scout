@@ -1,0 +1,27 @@
+// ScoutPackage: the index table from its migration, and the database engine.
+import "std"
+import "apogee-container"
+import "apogee-package"
+import "grav-db"
+import "grav-orbit"
+import "../src/all.grav"
+use apogee.*
+use db.*
+use orbit.*
+
+test "the package connects itself" {
+    let file = Dir.temp() + "/scout_pkg_" + str(Process.pid()) + ".sqlite"
+    new File(file).delete()
+    DB.connect(Sqlite.open(file))
+    let ps = Packages.discover()
+    assertEq(ps[0].name(), "scout")
+    Packages.applyDefaults(ps)
+    assertEq(ps[0].migrations().size(), 1)
+    for (m in ps[0].migrations()) { (m as Migration).up() }
+    assert(Schema.hasTable("scout_index"))
+    let ctx = new PackageContext(new Container(), "testing", "")
+    ctx.poolFn = fn() -> Pool { return new Pool(1, fn() -> Connection { return Sqlite.open(file) as Connection }) }
+    ps[0].boot(ctx)
+    assert(Scout.engine is DatabaseEngine)
+    new File(file).delete()
+}
