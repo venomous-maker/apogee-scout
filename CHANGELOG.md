@@ -6,6 +6,13 @@ compiler versions it builds with.
 
 ## Unreleased
 
+Needs grav 1.12.0 or newer.
+
+- `ScoutPackage`: the module connects itself to an apogee-framework app (apogee-package):
+  its settings, wiring moved here from the framework.
+- Its tables as a migration (`CreateScoutIndexTable`, run by `migrate`); the store's own
+  table-making method uses the same definition.
+
 ## 0.1.1 (2026-11-21)
 
 - Laid out by `grav fmt` and tidied as grav 1.11's lints suggest (`isEmpty()`
