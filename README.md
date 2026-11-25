@@ -20,11 +20,26 @@ class Post extends Model implements Searchable {
     fn toSearchableArray() -> HashMap<string, any> { return {"title": self.title, "body": self.body, "published": self.published} }
 }
 
-Scout.use(new DatabaseEngine(pool))          // then engine.createTables()
+Scout.use(new DatabaseEngine(pool))          // then engine.createTables() (in an app: the migration)
 Scout.observe::<Post>()                      // keep the index in step with saves and deletes
 Scout.importAll::<Post>()                    // index what is already there
 let posts = Scout.search::<Post>("grav compiler").where("published", true).take(10).get()
 ```
+
+## In an apogee-framework app
+
+Importing the module is all it takes: `ScoutPackage` (apogee-package) connects it when
+the app is created. The engine comes from `scout.driver`.
+
+**Migration:** `CreateScoutIndexTable` makes the `scout_index` table (only with the `database` driver). It is written in each database's own SQL: an FTS5 table, a `tsvector` column, a `FULLTEXT` index. Run `migrate` after adding the module.
+
+| Setting | Default |
+|---|---|
+| `scout.driver` | `SCOUT_DRIVER`: `database` (default), `meilisearch` or `memory` |
+| `scout.prefix` | `SCOUT_PREFIX`: before every index name |
+| `scout.meilisearch.host`, `.key` | `MEILISEARCH_HOST` (`http://127.0.0.1:7700`), `MEILISEARCH_KEY` |
+
+Your own configuration wins over these defaults.
 
 ## Models
 
@@ -71,6 +86,7 @@ A custom engine implements `SearchEngine` (`update`, `delete`, `search`,
 
 ```bash
 grav test tests/scout.grav
+grav test tests/package.grav
 MEILI_URL=http://127.0.0.1:7700 MEILI_KEY=... grav test tests/scout.grav   # with Meilisearch too
 ```
 
