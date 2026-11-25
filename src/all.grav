@@ -2,3 +2,4 @@
 import "engines.grav"
 import "meilisearch.grav"
 import "scout.grav"
+import "package.grav"

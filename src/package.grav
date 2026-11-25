@@ -1,0 +1,31 @@
+// package.grav — how apogee-scout connects itself to an app (apogee-package):
+// scout.driver is database (full-text search in the app's database: the
+// CreateScoutIndexTable migration), meilisearch or memory.
+import "std"
+import "apogee-config"
+import "apogee-package"
+import "engines.grav"
+import "meilisearch.grav"
+import "scout.grav"
+import "migration.grav"
+
+namespace apogee {
+
+    class ScoutPackage extends ApogeePackage {
+        constructor() {}
+        fn name() -> string { return "scout"; }
+        fn defaults() -> HashMap<string, any> {
+            return {"scout.driver": Env.get("SCOUT_DRIVER", "database"), "scout.prefix": Env.get("SCOUT_PREFIX", ""),
+                    "scout.meilisearch.host": Env.get("MEILISEARCH_HOST", "http://127.0.0.1:7700"),
+                    "scout.meilisearch.key": Env.get("MEILISEARCH_KEY", "")};
+        }
+        fn migrations() -> Array<any> { return Config.getString("scout.driver", "database") == "database" ? [new CreateScoutIndexTable() as any] : new Array<any>(); }
+        fn boot(app: PackageContext) {
+            let driver = Config.getString("scout.driver", "database");
+            Scout.prefix = Config.getString("scout.prefix");
+            if (driver == "database") { Scout.use(new DatabaseEngine(app.storePool())); }
+            else if (driver == "meilisearch") { Scout.use(new MeilisearchEngine(Config.getString("scout.meilisearch.host"), Config.getString("scout.meilisearch.key"))); }
+            else { Scout.use(new MemoryEngine()); }
+        }
+    }
+}
