@@ -3,6 +3,7 @@
 // FULLTEXT), or in Meilisearch (meilisearch.grav).
 import "std"
 import "grav-db"
+import "migration.grav"
 use db.*
 
 namespace apogee {
@@ -229,24 +230,8 @@ namespace apogee {
             if (self.driver == "") { self.driver = c.driver(); }
             try { f(c); } finally { self.pool.release(c); }
         }
-        fn createTables() {
-            self.with(fn(c: Connection) {
-                let d = c.driver();
-                if (d == "sqlite") {
-                    c.exec("CREATE VIRTUAL TABLE IF NOT EXISTS " + self.table + " USING fts5(index_name UNINDEXED, doc_id UNINDEXED, content, " +
-                           "fields UNINDEXED, tokenize = 'unicode61 remove_diacritics 2')");
-                } else if (d == "postgres") {
-                    c.exec("CREATE TABLE IF NOT EXISTS " + self.table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
-                           "content TEXT NOT NULL, fields TEXT NOT NULL, tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED, " +
-                           "PRIMARY KEY (index_name, doc_id))");
-                    c.exec("CREATE INDEX IF NOT EXISTS " + self.table + "_tsv ON " + self.table + " USING GIN (tsv)");
-                } else {
-                    c.exec("CREATE TABLE IF NOT EXISTS " + self.table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
-                           "content LONGTEXT NOT NULL, fields LONGTEXT NOT NULL, PRIMARY KEY (index_name, doc_id), FULLTEXT KEY " +
-                           self.table + "_content (content)) ENGINE=InnoDB");
-                }
-            });
-        }
+        // Makes the table (nothing if it is there); in an app, `migrate` does (CreateScoutIndexTable).
+        fn createTables() { self.with(fn(c: Connection) { CreateScoutIndexTable.ensure(c, self.table); }); }
         fn update(index: string, docs: Array<SearchDocument>) {
             if (docs.isEmpty()) { return; }
             self.with(fn(c: Connection) {

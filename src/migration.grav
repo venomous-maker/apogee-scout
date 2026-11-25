@@ -1,0 +1,36 @@
+// migration.grav — the search index table for DatabaseEngine, as a migration
+// for `migrate`: an FTS5 table on SQLite, a tsvector column with a GIN index on
+// PostgreSQL, a FULLTEXT index on MySQL (so written in each one's SQL).
+import "std"
+import "grav-db"
+import "grav-orbit"
+use db.*
+use orbit.*
+
+namespace apogee {
+
+    class CreateScoutIndexTable extends Migration {
+        public table: string
+        constructor(table: string = "scout_index") { self.table = table; }
+        fn name() -> string { return "CreateScoutIndexTable"; }
+        fn up() { CreateScoutIndexTable.ensure(DB.connection(), self.table); }
+        fn down() { Schema.dropIfExists(self.table); }
+        // Makes the table on `c` unless it is there.
+        static fn ensure(c: Connection, table: string) {
+            let d = c.driver();
+            if (d == "sqlite") {
+                c.exec("CREATE VIRTUAL TABLE IF NOT EXISTS " + table + " USING fts5(index_name UNINDEXED, doc_id UNINDEXED, content, " +
+                       "fields UNINDEXED, tokenize = 'unicode61 remove_diacritics 2')");
+            } else if (d == "postgres") {
+                c.exec("CREATE TABLE IF NOT EXISTS " + table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
+                       "content TEXT NOT NULL, fields TEXT NOT NULL, tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED, " +
+                       "PRIMARY KEY (index_name, doc_id))");
+                c.exec("CREATE INDEX IF NOT EXISTS " + table + "_tsv ON " + table + " USING GIN (tsv)");
+            } else {
+                c.exec("CREATE TABLE IF NOT EXISTS " + table + " (index_name VARCHAR(191) NOT NULL, doc_id VARCHAR(191) NOT NULL, " +
+                       "content LONGTEXT NOT NULL, fields LONGTEXT NOT NULL, PRIMARY KEY (index_name, doc_id), FULLTEXT KEY " +
+                       table + "_content (content)) ENGINE=InnoDB");
+            }
+        }
+    }
+}
