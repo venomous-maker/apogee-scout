@@ -7,7 +7,7 @@ deleted, and a search gives back the models, best match first. Indexes live in
 memory, in the app's own database (SQLite FTS5, PostgreSQL full-text search,
 MySQL FULLTEXT), or in [Meilisearch](https://www.meilisearch.com).
 
-```grav
+```typescript
 import "std"
 import "apogee-scout"
 use apogee.*
