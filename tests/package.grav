@@ -25,3 +25,16 @@ test "the package connects itself" {
     assert(Scout.engine is DatabaseEngine)
     new File(file).delete()
 }
+
+// With SCOUT_MYSQL_URL / SCOUT_POSTGRES_URL set (mysql://… / postgres://…).
+test "the migration on MySQL and PostgreSQL" {
+    for (url in [env("SCOUT_MYSQL_URL"), env("SCOUT_POSTGRES_URL")]) {
+        if (url == "") { continue }
+        DB.connect(Str.startsWith(url, "mysql") ? MySql.open(url) as Connection : Postgres.open(url) as Connection)
+        for (m in Packages.discover()[0].migrations()) { (m as Migration).down() }
+        for (m in Packages.discover()[0].migrations()) { (m as Migration).up() }
+        assert(Schema.hasTable("scout_index"))
+        for (m in Packages.discover()[0].migrations()) { (m as Migration).down() }
+        assert(!Schema.hasTable("scout_index"))
+    }
+}
